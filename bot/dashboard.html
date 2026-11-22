@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Bot de trading</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #16181d; --muted: #6b7280; --line: #e5e7eb;
+    --up: #0f9d58; --down: #d93025; --accent: #2563eb; --warn: #b45309;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0e1116; --card: #161b22; --text: #e6edf3; --muted: #8b949e; --line: #262c36;
+            --up: #3fb950; --down: #f85149; --accent: #58a6ff; --warn: #d29922; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; }
+  h1 { font-size: 20px; margin: 0 auto 0 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+       margin: 0 0 12px; font-weight: 600; }
+  .badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+           border: 1px solid var(--line); background: var(--card); }
+  .badge.live { color: var(--down); border-color: var(--down); }
+  .badge.ok { color: var(--up); } .badge.pause { color: var(--warn); } .badge.halt { color: var(--down); }
+  .muted { color: var(--muted); font-size: 13px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;
+          margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .kpi .label { color: var(--muted); font-size: 13px; }
+  .kpi .value { font-size: clamp(18px, 5vw, 24px); font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; margin-bottom: 16px; }
+  .card { min-width: 0; }
+  @media (max-width: 800px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  svg { width: 100%; height: 220px; display: block; }
+  .axis { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; color: var(--muted); font-size: 12px;
+          font-variant-numeric: tabular-nums; margin: 6px 0 0; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 8px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  .scroll { overflow-x: auto; }
+  .empty { color: var(--muted); padding: 12px 0; }
+  ul.events { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+  ul.events li { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  ul.events time { color: var(--muted); font-size: 12px; display: block; }
+  .error { color: var(--down); margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Bot de trading</h1>
+    <span id="mode" class="badge">…</span>
+    <span id="state" class="badge">…</span>
+    <span id="updated" class="muted"></span>
+  </header>
+  <div id="error" class="error"></div>
+
+  <section class="kpis">
+    <div class="card kpi"><div class="label">Capital</div><div class="value" id="k-equity">–</div></div>
+    <div class="card kpi"><div class="label">Depuis le départ</div><div class="value" id="k-total">–</div></div>
+    <div class="card kpi"><div class="label">Aujourd'hui</div><div class="value" id="k-day">–</div></div>
+    <div class="card kpi"><div class="label">Recul depuis le plus haut</div><div class="value" id="k-dd">–</div></div>
+    <div class="card kpi"><div class="label">Liquidités</div><div class="value" id="k-cash">–</div></div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><h2>Évolution du capital</h2><svg id="chart" viewBox="0 0 700 240" preserveAspectRatio="none"></svg><div class="axis" id="axis"></div></div>
+    <div class="card"><h2>Prix</h2><div id="prices"></div></div>
+  </section>
+
+  <section class="card" style="margin-bottom:16px"><h2>Positions ouvertes</h2><div class="scroll" id="positions"></div></section>
+
+  <section class="grid">
+    <div class="card"><h2>Derniers trades</h2><div class="scroll" id="trades"></div></div>
+    <div class="card"><h2>Événements</h2><ul class="events" id="events"></ul></div>
+  </section>
+</main>
+<script>
+const fmtUsd = x => x == null ? "–" : x.toLocaleString("fr-FR", {style: "currency", currency: "USD", currencyDisplay: "narrowSymbol"});
+const fmtPct = x => x == null ? "–" : (x >= 0 ? "+" : "") + (x * 100).toFixed(2).replace(".", ",") + " %";
+const cls = x => x > 0 ? "up" : x < 0 ? "down" : "";
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+const time = s => s ? new Date(s).toLocaleString("fr-FR", {dateStyle: "short", timeStyle: "short"}) : "";
+
+function setKpi(id, text, value) {
+  const el = document.getElementById(id);
+  el.textContent = text; el.className = "value " + (value === undefined ? "" : cls(value));
+}
+
+function table(rows, cols) {
+  if (!rows.length) return '<div class="empty">Aucune donnée</div>';
+  return "<table><thead><tr>" + cols.map(c => `<th>${c[0]}</th>`).join("") + "</tr></thead><tbody>" +
+    rows.map(r => "<tr>" + cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("") +
+    "</tbody></table>";
+}
+
+function drawChart(points) {
+  const svg = document.getElementById("chart");
+  if (points.length < 2) {
+    svg.innerHTML = "";
+    document.getElementById("axis").textContent = "Pas encore assez de données (un point toutes les 15 minutes)";
+    return;
+  }
+  const W = 700, H = 240, P = 8;
+  const ys = points.map(p => p.equity);
+  const min = Math.min(...ys), max = Math.max(...ys), span = (max - min) || 1;
+  const x = i => P + i * (W - 2 * P) / (points.length - 1);
+  const y = v => H - P - (v - min) * (H - 2 * P) / span;
+  const line = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.equity).toFixed(1)}`).join("");
+  const color = ys[ys.length - 1] >= ys[0] ? "var(--up)" : "var(--down)";
+  svg.innerHTML =
+    `<path d="${line} L${x(points.length - 1)},${H - P} L${P},${H - P} Z" fill="${color}" opacity=".08"/>` +
+    `<path d="${line}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  document.getElementById("axis").innerHTML =
+    `<span>${esc(time(points[0].time))}</span><span>min ${esc(fmtUsd(min))} · max ${esc(fmtUsd(max))}</span>` +
+    `<span>${esc(time(points[points.length - 1].time))}</span>`;
+}
+
+async function get(path) {
+  const r = await fetch(path, {cache: "no-store"});
+  if (!r.ok) throw new Error(path + " : " + r.status);
+  return r.json();
+}
+
+async function refresh() {
+  try {
+    const [s, eq, trades, events] = await Promise.all(
+      ["/api/status", "/api/equity", "/api/trades", "/api/events"].map(get));
+    document.getElementById("error").textContent = s.last_error ? "Dernière erreur : " + s.last_error : "";
+
+    const mode = document.getElementById("mode");
+    mode.textContent = s.mode === "live" ? "ARGENT RÉEL" : "SIMULATION";
+    mode.className = "badge " + (s.mode === "live" ? "live" : "");
+    const st = document.getElementById("state");
+    st.textContent = s.halted ? "Arrêté : " + s.halt_reason : s.paused ? "En pause" : "Actif";
+    st.className = "badge " + (s.halted ? "halt" : s.paused ? "pause" : "ok");
+    document.getElementById("updated").textContent = "Dernier cycle : " + (time(s.last_step) || "–");
+
+    const total = s.mode === "paper" ? s.equity / s.initial_cash - 1 : null;
+    setKpi("k-equity", fmtUsd(s.equity));
+    setKpi("k-total", total == null ? "–" : fmtPct(total), total);
+    setKpi("k-day", fmtPct(s.day_pnl), s.day_pnl);
+    setKpi("k-dd", fmtPct(s.drawdown), s.drawdown);
+    setKpi("k-cash", fmtUsd(s.cash));
+
+    drawChart(eq);
+    document.getElementById("prices").innerHTML = table(
+      Object.entries(s.prices).map(([k, v]) => ({k, v})),
+      [["Crypto", r => esc(r.k)], ["Prix", r => fmtUsd(r.v)]]);
+    document.getElementById("positions").innerHTML = table(s.positions, [
+      ["Crypto", r => esc(r.product)], ["Quantité", r => r.qty.toFixed(6)],
+      ["Entrée", r => fmtUsd(r.entry_price)], ["Prix", r => fmtUsd(r.price)],
+      ["Valeur", r => fmtUsd(r.value)],
+      ["Gain", r => `<span class="${cls(r.pnl_pct)}">${fmtPct(r.pnl_pct)}</span>`],
+      ["Stop", r => `${fmtUsd(r.stop)} <span class="muted">(${fmtPct(r.stop_dist_pct)})</span>`]]);
+    document.getElementById("trades").innerHTML = table(trades.slice(0, 20), [
+      ["Date", r => time(r.time)], ["Crypto", r => esc(r.product)],
+      ["Sens", r => r.side === "buy" ? '<span class="up">Achat</span>' : '<span class="down">Vente</span>'],
+      ["Prix", r => fmtUsd(r.price)], ["Montant", r => fmtUsd(r.usd)],
+      ["Motif", r => esc(r.reason)],
+      ["Résultat", r => r.pnl_pct == null ? "" : `<span class="${cls(r.pnl_pct)}">${fmtPct(r.pnl_pct)}</span>`]]);
+    document.getElementById("events").innerHTML = events.length
+      ? events.map(e => `<li><time>${time(e.time)}</time>${esc(e.message)}</li>`).join("")
+      : '<li class="empty">Aucun événement</li>';
+  } catch (e) {
+    document.getElementById("error").textContent = "Impossible de joindre le bot (" + e.message + ")";
+  }
+}
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Configuration Cloudflare du Worker (tests locaux : npm run build && npx wrangler dev)
+name = "trading-bot"
+main = "dist/worker.js"
+compatibility_date = "2024-12-01"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "trading-bot"
+database_id = "18538a54-9e75-4e51-b716-f4b9d6c4bc44"
+
+[vars]
+PUBLIC_URL = "https://trading-bot.ahamedsignate2.workers.dev"

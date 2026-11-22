@@ -6,6 +6,8 @@ quote_currency: USD
 initial_cash: 10000    # capital fictif du mode paper et du backtest
 history_start: "2020-01-01"
 poll_seconds: 60       # fréquence de vérification des stops
+dashboard_host: 127.0.0.1  # ne pas changer : Cloudflare Tunnel se connecte en local
+dashboard_port: 8080
 
 strategy:
   ema_fast: 50         # moyenne mobile rapide

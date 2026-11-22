@@ -13,11 +13,13 @@ from .strategy import StrategyParams
 class Config:
     mode: str = "paper"  # "paper" (simulation) ou "live" (argent réel)
     products: list = field(default_factory=lambda: ["BTC-USD", "ETH-USD", "SOL-USD"])
-    granularity: str = "FOUR_HOUR"
+    granularity: str = "ONE_DAY"
     quote_currency: str = "USD"
     initial_cash: float = 10_000.0
-    history_start: str = "2021-01-01"
+    history_start: str = "2020-01-01"
     poll_seconds: int = 60
+    dashboard_host: str = "127.0.0.1"
+    dashboard_port: int = 8080
     strategy: StrategyParams = field(default_factory=StrategyParams)
     risk: RiskParams = field(default_factory=RiskParams)
     costs: CostParams = field(default_factory=CostParams)

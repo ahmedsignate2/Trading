@@ -67,6 +67,34 @@ def load_dotenv(path: str = ".env") -> None:
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
+def run_all(cfg, state_path: str) -> None:
+    """Lance la boucle de trading, le bot Telegram et le tableau de bord ensemble."""
+    import signal
+    import threading
+
+    from .dashboard import serve
+    from .live import LiveBot
+    from .telegram_bot import TelegramController
+
+    bot = LiveBot(cfg, state_path)
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    threads = [
+        threading.Thread(target=TelegramController(bot).run, args=(stop,), name="telegram", daemon=True),
+        threading.Thread(target=serve, args=(bot, stop, cfg.dashboard_host, cfg.dashboard_port),
+                         name="dashboard", daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    try:
+        bot.run(stop)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop.set()
+        logging.getLogger("bot").info("Arrêt du bot.")
+
+
 def main() -> None:
     load_dotenv()
     ap = argparse.ArgumentParser(prog="bot", description=__doc__,
@@ -85,8 +113,7 @@ def main() -> None:
     if args.command == "backtest":
         cmd_backtest(cfg, args)
     else:
-        from .live import LiveBot
-        LiveBot(cfg, args.state or f"state/{cfg.mode}.json").run()
+        run_all(cfg, args.state or f"state/{cfg.mode}.json")
 
 
 if __name__ == "__main__":

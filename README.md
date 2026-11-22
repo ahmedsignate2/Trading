@@ -58,6 +58,50 @@ python -m pytest tests
 Tous les réglages sont dans `config.yaml`. Les trades du backtest sont exportés dans `results/`,
 le journal du bot dans `logs/bot.log`, son état (positions, stops) dans `state/`.
 
+## Hébergement Cloudflare (bot, Telegram et tableau de bord)
+
+Le bot tourne entièrement sur Cloudflare, sans machine personnelle :
+
+| Élément | Rôle |
+|---|---|
+| Worker `trading-bot` | Code du bot (dossier `worker/`, en TypeScript) |
+| Déclencheur toutes les minutes | Vérifie les stops, applique la stratégie à chaque clôture journalière |
+| Base D1 `trading-bot` | Positions, capital, journal des trades et des événements |
+| `https://trading-bot.ahamedsignate2.workers.dev` | Tableau de bord (mot de passe) et webhook Telegram |
+
+Le Worker utilise exactement la même stratégie que le backtest Python : `worker/test/parity.test.mjs`
+vérifie que les signaux sont identiques sur l'historique réel.
+
+### Secrets à ajouter (une seule fois)
+
+Cloudflare → Workers & Pages → `trading-bot` → Settings → Variables and Secrets → Add (type *Secret*) :
+
+| Nom | Valeur |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Jeton donné par @BotFather (`/newbot`) |
+| `TELEGRAM_CHAT_ID` | Votre identifiant Telegram (envoyez un message à @userinfobot) |
+| `DASHBOARD_PASSWORD` | Mot de passe du tableau de bord (12 caractères minimum) |
+
+Le webhook Telegram s'enregistre tout seul dans la minute qui suit. `TELEGRAM_WEBHOOK_SECRET`
+est déjà configuré. Le bot n'obéit qu'à votre identifiant Telegram ; les ventes manuelles
+demandent `/confirmer`.
+
+### Commandes Telegram
+
+`/statut` `/positions` `/prix` `/signaux` `/journal` `/perf` `/pause` `/reprendre`
+`/vendre BTC` `/vendre_tout` `/reset_coupe_circuit` `/confirmer` `/dashboard` `/aide`
+
+### Modifier le Worker
+
+```bash
+cd worker && npm install
+npm test            # parité avec Python
+npm run typecheck
+npm run build       # produit dist/worker.js
+```
+
+Le Worker est en mode **simulation** (argent fictif) : il ne passe aucun ordre réel.
+
 ## Passer en argent réel (plus tard, seulement après le mode paper)
 
 1. Créez une clé API sur <https://portal.cdp.coinbase.com> avec les droits **View + Trade uniquement**
