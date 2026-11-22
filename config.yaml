@@ -1,0 +1,29 @@
+# Configuration du bot. Commencez TOUJOURS en mode paper.
+mode: paper            # paper = simulation, live = argent réel
+products: [BTC-USD, ETH-USD, SOL-USD]
+granularity: ONE_DAY   # bougies journalières (les frais rendent le 4h non rentable)
+quote_currency: USD
+initial_cash: 10000    # capital fictif du mode paper et du backtest
+history_start: "2020-01-01"
+poll_seconds: 60       # fréquence de vérification des stops
+
+strategy:
+  ema_fast: 50         # moyenne mobile rapide
+  ema_slow: 200        # moyenne mobile lente (filtre de tendance)
+  breakout: 20         # cassure du plus haut des 20 dernières bougies
+  atr_period: 14
+  stop_atr: 2.5        # stop initial = entrée - 2,5 x ATR
+  trail_atr: 3.0       # stop suiveur = plus haute clôture - 3 x ATR
+
+risk:
+  risk_per_trade: 0.01     # 1 % du capital perdu au maximum si le stop est touché
+  max_position_pct: 0.33   # une crypto ne dépasse jamais 33 % du capital
+  max_total_exposure: 0.99
+  daily_loss_limit: 0.03   # -3 % sur la journée : plus de nouvelle entrée
+  max_drawdown: 0.20       # -20 % depuis le plus haut : arrêt total du bot
+  min_order_usd: 10
+  max_order_usd: 500       # plafond par ordre, à ajuster en réel
+
+costs:
+  fee: 0.006               # frais taker Coinbase au palier le plus bas
+  slippage: 0.0005
