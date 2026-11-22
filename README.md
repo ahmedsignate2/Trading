@@ -100,7 +100,19 @@ npm run typecheck
 npm run build       # produit dist/worker.js
 ```
 
-Le Worker est en mode **simulation** (argent fictif) : il ne passe aucun ordre réel.
+### Argent réel (Coinbase)
+
+Le Worker passe de vrais ordres au marché sur Coinbase quand `MODE=live` et que les secrets
+`COINBASE_API_KEY` / `COINBASE_API_SECRET` sont présents (clé CDP avec droits **View + Trade**,
+jamais **Transfer**). Sans ces secrets, il ne passe aucun ordre et le signale sur Telegram.
+
+| Variable | Valeur actuelle | Rôle |
+|---|---|---|
+| `MODE` | `live` | `live` = argent réel, autre valeur = simulation |
+| `QUOTE` | `EUR` | Devise du compte : paires BTC-EUR, ETH-EUR, SOL-EUR |
+| `MAX_ORDER` | `50` | Plafond par ordre, dans la devise du compte |
+
+Commande Telegram `/solde` : soldes réels du compte Coinbase.
 
 ## Passer en argent réel (plus tard, seulement après le mode paper)
 

@@ -1,6 +1,6 @@
 // Commandes Telegram reçues par webhook. Seul TELEGRAM_CHAT_ID est obéi.
 import type { Bot, Env } from "./bot";
-import { CONFIG } from "./strategy";
+
 
 const CONFIRM_MS = 60_000;
 
@@ -8,6 +8,7 @@ export const COMMANDS: [string, string][] = [
   ["statut", "Capital, performance du jour, état du bot"],
   ["positions", "Positions ouvertes avec gain et stop"],
   ["prix", "Prix actuels"],
+  ["solde", "Soldes du compte Coinbase (mode réel)"],
   ["signaux", "Distance de chaque crypto à un signal d'achat"],
   ["journal", "Derniers trades (ex. /journal 20)"],
   ["perf", "Bilan des trades réalisés"],
@@ -57,7 +58,7 @@ export async function ensureWebhook(bot: Bot): Promise<void> {
   if (!r.ok) throw new Error(`setWebhook Telegram : ${r.description}`);
   await tg(env, "setMyCommands", { commands: COMMANDS.map(([command, description]) => ({ command, description })) });
   await bot.env.DB.prepare("UPDATE account SET webhook_key = ? WHERE id = 1").bind(key).run();
-  await bot.say(`Bot connecté à Telegram en mode ${CONFIG.mode.toUpperCase()}. /aide pour les commandes.`);
+  await bot.say(`Bot connecté à Telegram en mode ${bot.mode === "live" ? "ARGENT RÉEL" : "SIMULATION"}. /aide pour les commandes.`);
 }
 
 /** Traite une mise à jour Telegram. Renvoie la réponse à envoyer (ou "" si rien). */
@@ -95,7 +96,10 @@ async function run(bot: Bot, cmd: string, args: string[]): Promise<string> {
       const etat = s.halted ? `🛑 ARRÊTÉ (${s.halt_reason})` : s.paused ? "⏸️ en pause" : "✅ actif";
       return [
         `Mode : ${s.mode === "paper" ? "SIMULATION" : "ARGENT RÉEL"} | ${etat}`,
-        `Capital : ${money(s.equity)} (${pct(s.equity / s.initial_cash - 1)} depuis le départ)`,
+        ...(s.missing_keys ? ["⚠️ Mode réel demandé : ajoutez COINBASE_API_KEY et COINBASE_API_SECRET dans Cloudflare."] : []),
+        s.mode === "paper"
+          ? `Capital : ${money(s.equity)} (${pct(s.equity / s.initial_cash - 1)} depuis le départ)`
+          : `Capital : ${money(s.equity)} | Plafond par ordre : ${money(s.max_order)}`,
         `Liquidités : ${money(s.cash)}`,
         `Aujourd'hui : ${pct(s.day_pnl)} | Recul depuis le plus haut : ${pct(s.drawdown)}`,
         `Positions ouvertes : ${s.positions.length}`,
@@ -145,12 +149,19 @@ async function run(bot: Bot, cmd: string, args: string[]): Promise<string> {
         `Variation moyenne : ${pct(avg)}\nMeilleur : ${best.product} ${pct(best.pnl_pct)}\nPire : ${worst.product} ${pct(worst.pnl_pct)}`;
     }
 
+    case "solde": {
+      if (bot.mode !== "live") return "Le bot est en simulation : pas de compte Coinbase connecté.";
+      const b = await (bot.broker as import("./broker").LiveBroker).balances();
+      const lines = Object.entries(b).filter(([, v]) => v > 0).map(([c, v]) => `${c} : ${v.toLocaleString("fr-FR", { maximumFractionDigits: 8 })}`);
+      return lines.length ? "Soldes disponibles sur Coinbase :\n" + lines.join("\n") : "Aucun solde disponible sur Coinbase.";
+    }
+
     case "pause": await bot.setPaused(true); return "";
     case "reprendre": await bot.setPaused(false); return "";
 
     case "vendre": {
       if (!args[0]) return "Précisez la crypto, ex. /vendre BTC";
-      const product = args[0].toUpperCase().includes("-") ? args[0].toUpperCase() : `${args[0].toUpperCase()}-USD`;
+      const product = args[0].toUpperCase().includes("-") ? args[0].toUpperCase() : `${args[0].toUpperCase()}-${bot.quote}`;
       if (!(await bot.positions()).some(p => p.product === product)) return `Aucune position ouverte sur ${product}.`;
       return ask(bot, `Vendre toute la position ${product} ?`, `sell:${product}`);
     }

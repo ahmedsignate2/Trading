@@ -1,4 +1,5 @@
-// Cœur du bot : état dans D1, exécution simulée (paper), stops, signaux journaliers.
+// Cœur du bot : état dans D1, exécution (simulée ou réelle), stops, signaux journaliers.
+import { Broker, LiveBroker, PaperBroker } from "./broker";
 import { lastPrice, recentCandles } from "./coinbase";
 import {
   CONFIG, Guard, canOpen, initialStop, lastSignal, positionSizeUsd, trailStop, updateGuard,
@@ -12,6 +13,11 @@ export interface Env {
   TELEGRAM_WEBHOOK_SECRET?: string;
   DASHBOARD_PASSWORD?: string;
   PUBLIC_URL?: string;
+  MODE?: string;               // "live" = argent réel, sinon simulation
+  COINBASE_API_KEY?: string;
+  COINBASE_API_SECRET?: string;
+  MAX_ORDER?: string;          // plafond par ordre, en devise de cotation (défaut 50)
+  QUOTE?: string;              // devise de cotation : USD, EUR, USDC… (défaut USD)
 }
 
 export interface Account {
@@ -29,7 +35,27 @@ const fmt = (x: number) => x.toLocaleString("en-US", { maximumFractionDigits: 2 
 const pct = (x: number) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(2)} %`;
 
 export class Bot {
-  constructor(public env: Env, public notify: (msg: string) => Promise<void> = async () => {}) {}
+  mode: "paper" | "live";
+  missingKeys: boolean;
+  quote: string;
+  products: string[];
+  maxOrder: number;
+  broker: Broker;
+
+  constructor(public env: Env, public notify: (msg: string) => Promise<void> = async () => {}) {
+    const wantsLive = env.MODE === "live";
+    const hasKeys = !!(env.COINBASE_API_KEY && env.COINBASE_API_SECRET);
+    this.mode = wantsLive && hasKeys ? "live" : "paper";
+    this.missingKeys = wantsLive && !hasKeys;
+    this.quote = (env.QUOTE || "USD").toUpperCase();
+    this.products = ["BTC", "ETH", "SOL"].map(b => `${b}-${this.quote}`);
+    this.maxOrder = parseFloat(env.MAX_ORDER || "") || 50;
+    this.broker = this.mode === "live" ? new LiveBroker(env, this.quote) : new PaperBroker(env.DB);
+  }
+
+  private get risk() {
+    return { ...CONFIG.risk, maxOrderUsd: this.maxOrder };
+  }
 
   // --- base de données -------------------------------------------------------
   async init(): Promise<void> {
@@ -70,52 +96,60 @@ export class Bot {
       .bind(...values).run();
   }
 
-  // --- ordres simulés ----------------------------------------------------------
+  // --- ordres -------------------------------------------------------------------
   /** Vend une position. Le DELETE ... RETURNING garantit qu'elle n'est vendue qu'une fois. */
   async sell(product: string, price: number, reason: string): Promise<boolean> {
     const pos = await this.env.DB.prepare("DELETE FROM positions WHERE product = ? RETURNING *")
       .bind(product).first<Position>();
     if (!pos) return false;
-    const fill = price * (1 - CONFIG.costs.slippage);
-    const proceeds = pos.qty * fill * (1 - CONFIG.costs.fee);
-    const pnl = fill / pos.entry_price - 1;
-    await this.env.DB.batch([
-      this.env.DB.prepare("UPDATE account SET cash = cash + ? WHERE id = 1").bind(proceeds),
-      this.env.DB.prepare("INSERT INTO trades (time, product, side, qty, price, usd, reason, pnl_pct, mode) VALUES (?,?,?,?,?,?,?,?,?)")
-        .bind(nowIso(), product, "sell", pos.qty, fill, pos.qty * fill, reason, pnl, CONFIG.mode),
-    ]);
-    await this.say(`🔴 VENTE ${product} ${pos.qty.toFixed(6)} @ ${fmt(fill)} (${reason}) | variation ${pct(pnl)}`);
+    let f;
+    try {
+      f = await this.broker.sell(product, pos.qty, price);
+    } catch (e) {
+      // L'ordre a échoué : on remet la position pour que le stop reste surveillé.
+      await this.env.DB.prepare("INSERT OR IGNORE INTO positions VALUES (?,?,?,?,?,?)")
+        .bind(pos.product, pos.qty, pos.entry_price, pos.stop, pos.highest_close, pos.entry_time).run();
+      throw e;
+    }
+    const pnl = f.fill / pos.entry_price - 1;
+    await this.env.DB.prepare("INSERT INTO trades (time, product, side, qty, price, usd, reason, pnl_pct, mode) VALUES (?,?,?,?,?,?,?,?,?)")
+      .bind(nowIso(), product, "sell", f.qty, f.fill, f.usd, reason, pnl, this.mode).run();
+    await this.say(`🔴 VENTE ${product} ${f.qty.toFixed(6)} @ ${fmt(f.fill)} (${reason}) | variation ${pct(pnl)}`);
     return true;
   }
 
   async buy(product: string, usd: number, price: number, stop: number, close: number): Promise<void> {
-    const fill = price * (1 + CONFIG.costs.slippage);
-    const qty = usd * (1 - CONFIG.costs.fee) / fill;
-    // INSERT OR IGNORE : une seule position par crypto, même si deux cycles se chevauchent.
-    const ins = await this.env.DB.prepare("INSERT OR IGNORE INTO positions VALUES (?,?,?,?,?,?)")
-      .bind(product, qty, fill, stop, close, nowIso()).run();
-    if (ins.meta.changes !== 1) return;
+    if ((await this.positions()).some(p => p.product === product)) return;
+    const f = await this.broker.buy(product, usd, price);
     await this.env.DB.batch([
-      this.env.DB.prepare("UPDATE account SET cash = cash - ? WHERE id = 1").bind(usd),
+      this.env.DB.prepare("INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?)")
+        .bind(product, f.qty, f.fill, stop, close, nowIso()),
       this.env.DB.prepare("INSERT INTO trades (time, product, side, qty, price, usd, reason, pnl_pct, mode) VALUES (?,?,?,?,?,?,?,NULL,?)")
-        .bind(nowIso(), product, "buy", qty, fill, usd, "cassure", CONFIG.mode),
+        .bind(nowIso(), product, "buy", f.qty, f.fill, usd, "cassure", this.mode),
     ]);
-    await this.say(`🟢 ACHAT ${product} ${qty.toFixed(6)} @ ${fmt(fill)} (${fmt(usd)} $) | stop ${fmt(stop)}`);
+    const tag = this.mode === "live" ? " [RÉEL]" : "";
+    await this.say(`🟢 ACHAT${tag} ${product} ${f.qty.toFixed(6)} @ ${fmt(f.fill)} (${fmt(usd)} ${this.quote}) | stop ${fmt(stop)}`);
   }
 
   // --- cycle (appelé chaque minute par le déclencheur Cloudflare) -------------
   async step(): Promise<void> {
-    const acc = await this.account();
+    if (this.missingKeys) {
+      throw new Error("Mode réel demandé mais COINBASE_API_KEY / COINBASE_API_SECRET absents : aucun ordre n'est passé.");
+    }
+    let acc = await this.account();
+    if ((acc.guard as any).mode !== this.mode) await this.switchMode(acc);
+    acc = await this.account();
     const prices: Record<string, number> = {};
-    for (const p of CONFIG.products) prices[p] = await lastPrice(p);
-    let positions = await this.positions();
-    const equity = acc.cash + positions.reduce((s, p) => s + p.qty * prices[p.product], 0);
-    const guard = updateGuard(acc.guard, equity, new Date());
+    for (const p of this.products) prices[p] = await lastPrice(p);
+    const positions = await this.positions();
+    const cash = await this.broker.cash();
+    const equity = cash + positions.reduce((s, p) => s + p.qty * prices[p.product], 0);
+    const guard = { ...updateGuard(acc.guard, equity, new Date()), mode: this.mode };
     await this.saveAccount({ prices, guard });
 
     const last = await this.env.DB.prepare("SELECT max(time) AS t FROM equity").first<{ t: string | null }>();
     if (!last?.t || Date.now() - Date.parse(last.t) >= EQUITY_SNAPSHOT_MS) {
-      await this.env.DB.prepare("INSERT OR REPLACE INTO equity VALUES (?, ?, ?)").bind(nowIso(), equity, acc.cash).run();
+      await this.env.DB.prepare("INSERT OR REPLACE INTO equity VALUES (?, ?, ?)").bind(nowIso(), equity, cash).run();
     }
 
     if (guard.halted) {
@@ -134,7 +168,7 @@ export class Bot {
     const sec = CONFIG.granularitySeconds;
     const latestClosed = (Math.floor(Date.now() / 1000 / sec) - 1) * sec;
     const lastBar = { ...acc.last_bar };
-    for (const product of CONFIG.products) {
+    for (const product of this.products) {
       if ((lastBar[product] ?? 0) >= latestClosed) continue;
       const candles = await recentCandles(product, CONFIG.granularity, sec, 600);
       if (!candles.length || candles[candles.length - 1].time < latestClosed) continue;
@@ -163,11 +197,16 @@ export class Bot {
     }
     const positions = await this.positions();
     const exposure = positions.reduce((t, p) => t + p.qty * (acc.prices[p.product] ?? p.entry_price), 0);
-    const equity = acc.cash + exposure;
+    const cash = await this.broker.cash();
+    const equity = cash + exposure;
     const [ok, why] = canOpen(acc.guard, equity);
     if (!ok) { await this.say(`Signal d'achat ${product} ignoré : ${why}`, "warning"); return; }
     const stop = initialStop(s.close, s.atr);
-    const usd = positionSizeUsd(equity, acc.cash, exposure, price, stop);
+    const usd = positionSizeUsd(equity, cash, exposure, price, stop, this.risk);
+    if (usd <= 0 && cash < this.risk.minOrderUsd) {
+      await this.say(`Signal d'achat ${product} ignoré : solde ${this.quote} insuffisant (${fmt(cash)})`, "warning");
+      return;
+    }
     if (usd > 0) await this.buy(product, usd, price, stop, s.close);
   }
 
@@ -178,12 +217,15 @@ export class Bot {
       const price = acc.prices[p.product] ?? p.entry_price;
       return { ...p, price, value: p.qty * price, pnl_pct: price / p.entry_price - 1, stop_dist_pct: p.stop / price - 1 };
     });
-    const equity = acc.cash + positions.reduce((s, p) => s + p.value, 0);
+    let cash = acc.cash;
+    try { cash = await this.broker.cash(); } catch { /* affichage : on garde la dernière valeur */ }
+    const equity = cash + positions.reduce((s, p) => s + p.value, 0);
     const g = acc.guard;
     return {
-      mode: CONFIG.mode, products: CONFIG.products, granularity: CONFIG.granularity,
+      mode: this.mode, products: this.products, granularity: CONFIG.granularity, quote: this.quote,
+      max_order: this.maxOrder, missing_keys: this.missingKeys,
       paused: !!acc.paused, halted: !!g.halted, halt_reason: g.haltReason ?? "",
-      equity, cash: acc.cash, initial_cash: CONFIG.initialCash, peak_equity: g.peakEquity ?? equity,
+      equity, cash, initial_cash: CONFIG.initialCash, peak_equity: g.peakEquity ?? equity,
       drawdown: g.peakEquity ? equity / g.peakEquity - 1 : 0,
       day_pnl: g.dayStartEquity ? equity / g.dayStartEquity - 1 : 0,
       positions, prices: acc.prices, last_step: acc.last_step, last_error: acc.last_error,
@@ -209,11 +251,24 @@ export class Bot {
 
   async signalReport() {
     const out = [];
-    for (const product of CONFIG.products) {
+    for (const product of this.products) {
       const s = lastSignal(await recentCandles(product, CONFIG.granularity, CONFIG.granularitySeconds, 600));
       out.push({ product, ...s, toBreakoutPct: s.channelHigh / s.close - 1 });
     }
     return out;
+  }
+
+  /** Passage simulation <-> réel : on repart d'un état propre pour ne pas mélanger les deux. */
+  async switchMode(acc: Account): Promise<void> {
+    const old = await this.positions();
+    if (old.length) {
+      await this.env.DB.prepare("DELETE FROM positions").run();
+      await this.say(`Positions ${(acc.guard as any).mode ?? "simulées"} retirées du suivi : ${old.map(p => p.product).join(", ")}`, "warning");
+    }
+    await this.saveAccount({ guard: { mode: this.mode }, last_bar: {} });
+    await this.say(this.mode === "live"
+      ? `💶 Mode ARGENT RÉEL activé sur Coinbase (${this.products.join(", ")}). Plafond : ${fmt(this.maxOrder)} ${this.quote} par ordre.`
+      : "Mode SIMULATION activé.", "warning");
   }
 
   async recordError(e: unknown): Promise<void> {
