@@ -24,7 +24,7 @@ function equalSecret(a: string, b: string): boolean {
 
 function authorized(req: Request, env: Env): boolean {
   const pw = env.DASHBOARD_PASSWORD ?? "";
-  if (pw.length < 12) return false;
+  if (pw.length < 8) return false;
   const h = req.headers.get("Authorization") ?? "";
   if (!h.startsWith("Basic ")) return false;
   try {
@@ -55,8 +55,8 @@ export default {
       return new Response("ok");
     }
 
-    if (!(env.DASHBOARD_PASSWORD && env.DASHBOARD_PASSWORD.length >= 12)) {
-      return new Response("Tableau de bord désactivé : ajoutez le secret DASHBOARD_PASSWORD (12 caractères min).",
+    if (!(env.DASHBOARD_PASSWORD && env.DASHBOARD_PASSWORD.length >= 8)) {
+      return new Response("Tableau de bord désactivé : ajoutez le secret DASHBOARD_PASSWORD (8 caractères min).",
         { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } });
     }
     if (!authorized(req, env)) {

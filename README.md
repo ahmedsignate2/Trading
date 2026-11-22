@@ -80,7 +80,7 @@ Cloudflare → Workers & Pages → `trading-bot` → Settings → Variables and 
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Jeton donné par @BotFather (`/newbot`) |
 | `TELEGRAM_CHAT_ID` | Votre identifiant Telegram (envoyez un message à @userinfobot) |
-| `DASHBOARD_PASSWORD` | Mot de passe du tableau de bord (12 caractères minimum) |
+| `DASHBOARD_PASSWORD` | Mot de passe du tableau de bord (8 caractères minimum) |
 
 Le webhook Telegram s'enregistre tout seul dans la minute qui suit. `TELEGRAM_WEBHOOK_SECRET`
 est déjà configuré. Le bot n'obéit qu'à votre identifiant Telegram ; les ventes manuelles
