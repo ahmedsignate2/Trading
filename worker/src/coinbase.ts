@@ -31,7 +31,7 @@ export async function recentCandles(product: string, granularity: string, sec: n
     const d = await getJson(`${API}/${product}/candles?granularity=${granularity}&start=${start}&end=${end}`);
     for (const c of d.candles ?? []) {
       const t = parseInt(c.start);
-      byTime.set(t, { time: t, open: +c.open, high: +c.high, low: +c.low, close: +c.close });
+      byTime.set(t, { time: t, open: +c.open, high: +c.high, low: +c.low, close: +c.close, volume: +c.volume });
     }
   }
   return [...byTime.values()]

@@ -86,9 +86,24 @@ Le webhook Telegram s'enregistre tout seul dans la minute qui suit. `TELEGRAM_WE
 est déjà configuré. Le bot n'obéit qu'à votre identifiant Telegram ; les ventes manuelles
 demandent `/confirmer`.
 
+### Tableau de bord « Quant Terminal »
+
+`https://trading-bot.ahamedsignate2.workers.dev` (mot de passe), six onglets :
+
+| Onglet | Contenu |
+|---|---|
+| Vue d'ensemble | Analyse du jour, capital, exposition, positions, surveillance du marché |
+| Graphiques | Bougies journalières (TradingView Lightweight Charts), moyennes 50/200 j, volume, achats/ventes du bot, stop |
+| Marché | Régime par crypto (haussier / baissier / range), ADX, RSI, volatilité, volume, corrélations 90 j |
+| Risque | Exposition, montant en jeu si les stops sautent, jauges des coupe-circuits, Sharpe/Sortino réels |
+| Lab | Backtest 2020-2026 vs achat-conservation, réglage vs contrôle, walk-forward, Monte Carlo, hypothèses rejetées |
+| Journal | Trades (réels et simulés) et événements |
+
+Les indicateurs (RSI, ADX) sont vérifiés contre la bibliothèque Python `ta` (`worker/test/market.test.mjs`).
+
 ### Commandes Telegram
 
-`/statut` `/positions` `/prix` `/signaux` `/journal` `/perf` `/pause` `/reprendre`
+`/statut` `/positions` `/prix` `/marche` `/signaux` `/solde` `/journal` `/perf` `/pause` `/reprendre`
 `/vendre BTC` `/vendre_tout` `/reset_coupe_circuit` `/confirmer` `/dashboard` `/aide`
 
 ### Modifier le Worker

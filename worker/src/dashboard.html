@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Quant Terminal</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #0b0e13; --panel: #11161d; --panel2: #161c25; --line: #222b36; --text: #e7edf4;
+    --muted: #8593a3; --faint: #5d6b7b; --up: #22c55e; --down: #ef4444; --accent: #3b82f6;
+    --warn: #f59e0b; --fast: #f59e0b; --slow: #60a5fa; --chip-up: rgba(34,197,94,.14);
+    --chip-down: rgba(239,68,68,.14); --chip-mid: rgba(133,147,163,.16);
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f4f6f9; --panel: #ffffff; --panel2: #f7f9fb; --line: #e3e8ee; --text: #111827;
+            --muted: #5b6776; --faint: #8b95a3; --up: #0f9d58; --down: #d92d20; --accent: #2563eb;
+            --warn: #b45309; --fast: #d97706; --slow: #2563eb; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 14px/1.45 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .num { font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: -.01em; }
+  .up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--muted); } .faint { color: var(--faint); }
+
+  header { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent);
+           backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1280px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .brand { font-weight: 700; letter-spacing: .02em; margin-right: auto; display: flex; align-items: center; gap: 8px; }
+  .brand i { width: 10px; height: 10px; border-radius: 2px; background: var(--accent); transform: rotate(45deg); display: inline-block; }
+  .badge { font-size: 11px; font-weight: 700; letter-spacing: .06em; padding: 3px 9px; border-radius: 999px;
+           border: 1px solid var(--line); text-transform: uppercase; white-space: nowrap; }
+  .badge.live { color: var(--down); border-color: var(--down); background: var(--chip-down); }
+  .badge.ok { color: var(--up); border-color: color-mix(in srgb, var(--up) 50%, transparent); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+  .badge.halt { color: #fff; background: var(--down); border-color: var(--down); }
+  .ticker { max-width: 1280px; margin: 0 auto; padding: 0 16px 8px; display: flex; gap: 22px; overflow-x: auto; scrollbar-width: none; }
+  .ticker::-webkit-scrollbar { display: none; }
+  .tick { white-space: nowrap; font-size: 13px; }
+  .tick b { font-weight: 600; margin-right: 6px; }
+  nav { max-width: 1280px; margin: 0 auto; padding: 0 16px; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+  nav::-webkit-scrollbar { display: none; }
+  nav button { background: none; border: 0; color: var(--muted); font: inherit; font-weight: 600; padding: 10px 12px;
+               border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+  nav button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+
+  main { max-width: 1280px; margin: 0 auto; padding: 16px 16px 48px; }
+  section[role="tabpanel"] { display: none; }
+  section[role="tabpanel"].on { display: block; }
+  .grid { display: grid; gap: 12px; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 12px; }
+  .two { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); margin-bottom: 12px; }
+  .three { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-bottom: 12px; }
+  @media (max-width: 860px) { .two { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+  .panel h2 { margin: 0 0 10px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+              display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .kpi .l { color: var(--muted); font-size: 12px; }
+  .kpi .v { font-size: clamp(18px, 4.6vw, 22px); font-weight: 650; margin-top: 2px; white-space: nowrap; }
+  .kpi .s { color: var(--faint); font-size: 12px; margin-top: 2px; }
+  .chart { width: 100%; height: 300px; }
+  .chart.tall { height: 440px; }
+  @media (max-width: 600px) { .chart.tall { height: 340px; } }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  th:first-child, td:first-child { text-align: left; }
+  tr:last-child td { border-bottom: 0; }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+  .chip.haussier, .chip.achat { background: var(--chip-up); color: var(--up); }
+  .chip.baissier { background: var(--chip-down); color: var(--down); }
+  .chip.range, .chip.aucun { background: var(--chip-mid); color: var(--muted); }
+  .chip.attente { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+  .insight { border-left: 3px solid var(--accent); padding: 10px 12px; background: var(--panel2); border-radius: 0 8px 8px 0; margin-bottom: 12px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+  .seg button { background: none; border: 0; color: var(--muted); font: inherit; font-weight: 600; padding: 6px 12px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--panel2); color: var(--text); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+  .meter { height: 8px; background: var(--panel2); border-radius: 99px; overflow: hidden; border: 1px solid var(--line); }
+  .meter > div { height: 100%; background: var(--accent); }
+  .row { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .corr { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 8px; }
+  .corr > div { border-radius: 8px; padding: 10px; text-align: center; border: 1px solid var(--line); }
+  .bars { display: flex; align-items: flex-end; gap: 10px; height: 120px; padding-top: 8px; }
+  .bars div { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; font-size: 12px; height: 100%; }
+  .bars span.b { width: 100%; border-radius: 4px 4px 0 0; min-height: 2px; }
+  ul.log { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow-y: auto; }
+  ul.log li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  ul.log time { display: block; color: var(--faint); font-size: 12px; }
+  .err { color: var(--down); margin-bottom: 10px; }
+  .empty { color: var(--faint); padding: 14px 0; text-align: center; }
+  p.note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand"><i></i>Quant Terminal</div>
+    <span id="mode" class="badge">…</span>
+    <span id="state" class="badge">…</span>
+    <span id="updated" class="muted" style="font-size:12px"></span>
+  </div>
+  <div class="ticker" id="ticker"></div>
+  <nav role="tablist">
+    <button role="tab" data-tab="overview" aria-selected="true">Vue d'ensemble</button>
+    <button role="tab" data-tab="charts" aria-selected="false">Graphiques</button>
+    <button role="tab" data-tab="market" aria-selected="false">Marché</button>
+    <button role="tab" data-tab="risk" aria-selected="false">Risque</button>
+    <button role="tab" data-tab="lab" aria-selected="false">Lab</button>
+    <button role="tab" data-tab="journal" aria-selected="false">Journal</button>
+  </nav>
+</header>
+
+<main>
+  <div id="error" class="err"></div>
+
+  <section role="tabpanel" id="tab-overview" class="on">
+    <div class="insight" id="summary">Chargement de l'analyse…</div>
+    <div class="grid kpis" id="kpis"></div>
+    <div class="grid two">
+      <div class="panel"><h2>Capital <span class="faint" id="eq-note"></span></h2><div class="chart" id="equity-chart"></div></div>
+      <div class="panel"><h2>Positions ouvertes</h2><div class="scroll" id="positions"></div></div>
+    </div>
+    <div class="panel"><h2>Surveillance du marché <span class="faint">bougies journalières</span></h2><div class="scroll" id="watch"></div></div>
+  </section>
+
+  <section role="tabpanel" id="tab-charts">
+    <div class="seg" id="product-seg"></div>
+    <div class="panel" style="margin-bottom:12px">
+      <h2><span id="chart-title">—</span><span class="faint">1 jour</span></h2>
+      <div class="chart tall" id="price-chart"></div>
+      <div class="legend"><span><i style="background:var(--fast)"></i>Moyenne 50 j</span><span><i style="background:var(--slow)"></i>Moyenne 200 j</span><span><i style="background:var(--down)"></i>Stop</span><span>▲ achat · ▼ vente du bot</span></div>
+    </div>
+    <div class="grid kpis" id="asset-kpis"></div>
+  </section>
+
+  <section role="tabpanel" id="tab-market">
+    <div class="grid three" id="regimes"></div>
+    <div class="grid two">
+      <div class="panel"><h2>Corrélations <span class="faint">90 jours</span></h2><div class="corr" id="corr"></div>
+        <p class="note">Plus la corrélation est proche de 1, plus les cryptos bougent ensemble : détenir les trois diversifie peu.</p></div>
+      <div class="panel"><h2>Lecture des indicateurs</h2>
+        <div class="row"><span>Régime</span><span class="muted">moyennes 50/200 j + force de tendance</span></div>
+        <div class="row"><span>ADX</span><span class="muted">&gt; 25 tendance nette · &lt; 20 sans direction</span></div>
+        <div class="row"><span>RSI</span><span class="muted">&lt; 30 survendu · &gt; 70 suracheté</span></div>
+        <div class="row"><span>Volatilité</span><span class="muted">mouvement moyen d'une journée (ATR)</span></div>
+        <div class="row"><span>Volume</span><span class="muted">volume du jour ÷ moyenne 20 j</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section role="tabpanel" id="tab-risk">
+    <div class="grid kpis" id="risk-kpis"></div>
+    <div class="grid two">
+      <div class="panel"><h2>Exposition</h2><div id="exposure"></div></div>
+      <div class="panel"><h2>Garde-fous actifs</h2><div id="limits"></div></div>
+    </div>
+  </section>
+
+  <section role="tabpanel" id="tab-lab">
+    <div class="insight" id="lab-verdict"></div>
+    <div class="panel" style="margin-bottom:12px">
+      <h2>Backtest 2020 → 2026 <span class="faint">frais Coinbase inclus</span></h2>
+      <div class="chart" id="lab-chart"></div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>Stratégie du bot</span><span><i style="background:var(--muted)"></i>Garder BTC/ETH/SOL (achat-conservation)</span></div>
+    </div>
+    <div class="grid two">
+      <div class="panel"><h2>Réglage vs contrôle</h2><div class="scroll" id="lab-table"></div></div>
+      <div class="panel"><h2>Walk-forward <span class="faint">rendement par année testée</span></h2><div class="bars" id="wf"></div>
+        <p class="note">Chaque année est testée avec des réglages choisis uniquement sur les deux années précédentes.</p></div>
+    </div>
+    <div class="grid two">
+      <div class="panel"><h2>Monte Carlo <span class="faint">2 000 tirages des trades</span></h2><div id="mc"></div></div>
+      <div class="panel"><h2>Hypothèses testées</h2><div id="hyp"></div></div>
+    </div>
+  </section>
+
+  <section role="tabpanel" id="tab-journal">
+    <div class="grid two">
+      <div class="panel"><h2>Trades</h2><div class="scroll" id="trades"></div></div>
+      <div class="panel"><h2>Événements</h2><ul class="log" id="events"></ul></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+let QUOTE = "EUR";
+const money = (x, d = 2) => x == null || !isFinite(x) ? "–" : x.toLocaleString("fr-FR", {style: "currency", currency: QUOTE, currencyDisplay: "narrowSymbol", minimumFractionDigits: d, maximumFractionDigits: d});
+const price = x => money(x, x >= 1000 ? 0 : 2);
+const pct = (x, d = 2) => x == null || !isFinite(x) ? "–" : (x >= 0 ? "+" : "") + (x * 100).toFixed(d).replace(".", ",") + " %";
+const num = (x, d = 1) => x == null || !isFinite(x) ? "–" : x.toFixed(d).replace(".", ",");
+const cls = x => x > 0 ? "up" : x < 0 ? "down" : "";
+const when = s => s ? new Date(s).toLocaleString("fr-FR", {dateStyle: "short", timeStyle: "short"}) : "";
+const base = p => p.split("-")[0];
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+async function api(path) {
+  const r = await fetch(path, {cache: "no-store"});
+  if (!r.ok) throw new Error(path + " : " + r.status);
+  return r.json();
+}
+function table(rows, cols, empty = "Aucune donnée") {
+  if (!rows.length) return `<div class="empty">${empty}</div>`;
+  return "<table><thead><tr>" + cols.map(c => `<th>${c[0]}</th>`).join("") + "</tr></thead><tbody>" +
+    rows.map(r => "<tr>" + cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("") + "</tbody></table>";
+}
+const kpi = (l, v, s = "", c = "") => `<div class="panel kpi"><div class="l">${l}</div><div class="v num ${c}">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`;
+const chip = (t, k = t) => `<span class="chip ${k}">${esc(t)}</span>`;
+
+/* ---------- graphiques ---------- */
+const LC = window.LightweightCharts;
+function makeChart(el, opts = {}) {
+  if (!LC) { el.innerHTML = '<div class="empty">Bibliothèque de graphiques indisponible</div>'; return null; }
+  const c = LC.createChart(el, {
+    layout: { background: { type: "solid", color: "transparent" }, textColor: css("--muted"), fontSize: 11 },
+    grid: { vertLines: { color: css("--line") }, horzLines: { color: css("--line") } },
+    rightPriceScale: { borderColor: css("--line") }, timeScale: { borderColor: css("--line"), timeVisible: false },
+    crosshair: { mode: 1 }, handleScroll: true, handleScale: true, ...opts,
+  });
+  new ResizeObserver(() => c.applyOptions({ width: el.clientWidth, height: el.clientHeight })).observe(el);
+  return c;
+}
+const toTime = s => Math.floor(new Date(s).getTime() / 1000);
+
+let equityChart, equitySeries;
+function drawEquity(points) {
+  if (!equityChart) {
+    equityChart = makeChart($("equity-chart"), { timeScale: { borderColor: css("--line"), timeVisible: true } });
+    if (!equityChart) return;
+    equitySeries = equityChart.addAreaSeries({ lineColor: css("--accent"), topColor: "rgba(59,130,246,.28)", bottomColor: "rgba(59,130,246,0)", lineWidth: 2, priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
+  }
+  const seen = new Set();
+  const data = points.map(p => ({ time: toTime(p.time), value: p.equity })).filter(p => !seen.has(p.time) && seen.add(p.time));
+  equitySeries.setData(data);
+  equityChart.timeScale().fitContent();
+  $("eq-note").textContent = data.length < 2 ? "historique en cours de constitution" : `${data.length} points`;
+}
+
+let priceChart, candleSeries, volSeries, fastSeries, slowSeries, stopLine, currentProduct;
+async function drawProduct(product) {
+  currentProduct = product;
+  document.querySelectorAll("#product-seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.p === product));
+  $("chart-title").textContent = product;
+  if (!priceChart) {
+    priceChart = makeChart($("price-chart"));
+    if (!priceChart) return;
+    candleSeries = priceChart.addCandlestickSeries({ upColor: css("--up"), downColor: css("--down"), wickUpColor: css("--up"), wickDownColor: css("--down"), borderVisible: false });
+    volSeries = priceChart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, color: "rgba(133,147,163,.35)", lastValueVisible: false, priceLineVisible: false });
+    priceChart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    fastSeries = priceChart.addLineSeries({ color: css("--fast"), lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    slowSeries = priceChart.addLineSeries({ color: css("--slow"), lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+  }
+  const d = await api("/api/chart?product=" + encodeURIComponent(product));
+  candleSeries.setData(d.candles.map(c => ({ time: c[0], open: c[1], high: c[2], low: c[3], close: c[4] })));
+  volSeries.setData(d.candles.map(c => ({ time: c[0], value: c[5], color: c[4] >= c[1] ? "rgba(34,197,94,.3)" : "rgba(239,68,68,.3)" })));
+  fastSeries.setData(d.emaFast.map(x => ({ time: x[0], value: x[1] })));
+  slowSeries.setData(d.emaSlow.map(x => ({ time: x[0], value: x[1] })));
+  const day = t => Math.floor(toTime(t) / 86400) * 86400;
+  candleSeries.setMarkers(d.trades.map(t => t.side === "buy"
+    ? { time: day(t.time), position: "belowBar", color: css("--up"), shape: "arrowUp", text: "Achat" }
+    : { time: day(t.time), position: "aboveBar", color: css("--down"), shape: "arrowDown", text: "Vente " + pct(t.pnl_pct, 1) }));
+  if (stopLine) { candleSeries.removePriceLine(stopLine); stopLine = null; }
+  if (d.position) stopLine = candleSeries.createPriceLine({ price: d.position.stop, color: css("--down"), lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "Stop" });
+  priceChart.timeScale().setVisibleLogicalRange({ from: d.candles.length - 180, to: d.candles.length + 3 });
+  const a = (MARKET?.assets || []).find(x => x.product === product);
+  if (a) $("asset-kpis").innerHTML =
+    kpi("Prix", price(a.price), pct(a.change1d) + " aujourd'hui", "") +
+    kpi("Régime", a.regime, "ADX " + num(a.adx), cls(a.regime === "haussier" ? 1 : a.regime === "baissier" ? -1 : 0)) +
+    kpi("RSI 14", num(a.rsi), a.rsi < 30 ? "survendu" : a.rsi > 70 ? "suracheté" : "neutre") +
+    kpi("Volatilité", pct(a.atrPct, 1).replace("+", ""), "par jour (ATR)") +
+    kpi("Signal", a.signal, esc(a.reason), a.signal === "achat" ? "up" : "");
+}
+
+let labChart;
+function drawLab(r) {
+  const full = r.full, ins = r.in_sample, oos = r.out_sample, mc = r.monte_carlo;
+  $("lab-verdict").innerHTML = `<b>Verdict honnête.</b> Sur la période de contrôle (2024 → 2026), la stratégie fait <b class="${cls(oos.rendement_total)}">${pct(oos.rendement_total, 1)}</b> avec une perte maximale de ${pct(oos.drawdown_max, 1)}, contre une perte bien plus forte en gardant les cryptos. Elle protège le capital, mais son avantage n'est pas prouvé hors échantillon.`;
+  if (!labChart) {
+    labChart = makeChart($("lab-chart"));
+    if (labChart) {
+      const bh = labChart.addLineSeries({ color: css("--muted"), lineWidth: 1, priceLineVisible: false });
+      const bot = labChart.addAreaSeries({ lineColor: css("--accent"), topColor: "rgba(59,130,246,.22)", bottomColor: "rgba(59,130,246,0)", lineWidth: 2, priceLineVisible: false });
+      bh.setData(r.curve.map(c => ({ time: c[0], value: c[2] })));
+      bot.setData(r.curve.map(c => ({ time: c[0], value: c[1] })));
+      labChart.priceScale("right").applyOptions({ mode: 1 });
+      labChart.timeScale().fitContent();
+    }
+  }
+  const rows = [
+    ["Rendement total", "rendement_total", pct], ["Rendement annuel", "rendement_annuel", pct],
+    ["Perte max (drawdown)", "drawdown_max", pct], ["Sharpe", "sharpe", x => num(x, 2)], ["Sortino", "sortino", x => num(x, 2)],
+    ["Calmar", "calmar", x => num(x, 2)], ["VaR 95 % (jour)", "var95_jour", x => pct(x, 2)], ["Expected shortfall 95 %", "es95_jour", x => pct(x, 2)],
+    ["Trades", "nb_trades", x => num(x, 0)], ["Taux de réussite", "taux_reussite", x => pct(x, 0).replace("+", "")], ["Profit factor", "profit_factor", x => num(x, 2)],
+  ];
+  $("lab-table").innerHTML = table(rows, [["Métrique", x => x[0]],
+    ["2020-23 <span class='faint'>réglage</span>", x => `<span class="num ${x[1].startsWith("rend") ? cls(ins[x[1]]) : ""}">${x[2](ins[x[1]])}</span>`],
+    ["2024-26 <span class='faint'>contrôle</span>", x => `<span class="num ${x[1].startsWith("rend") ? cls(oos[x[1]]) : ""}">${x[2](oos[x[1]])}</span>`],
+    ["Total", x => `<span class="num">${x[2](full[x[1]])}</span>`]]);
+  const maxAbs = Math.max(0.01, ...r.walk_forward.map(w => Math.abs(w[2])));
+  $("wf").innerHTML = r.walk_forward.map(w => `<div><span class="num ${cls(w[2])}">${pct(w[2], 1)}</span><span class="b" style="height:${Math.max(2, Math.abs(w[2]) / maxAbs * 80)}%;background:${w[2] >= 0 ? "var(--up)" : "var(--down)"}"></span><span class="faint">${w[0]}</span></div>`).join("");
+  $("mc").innerHTML = [
+    ["Perte max médiane", pct(mc.dd_median, 1)], ["Perte max (pire 5 %)", pct(mc.dd_p95, 1)],
+    ["Rendement médian", pct(mc.ret_median, 1)], ["Rendement (pire 5 %)", pct(mc.ret_p5, 1)],
+    ["Probabilité de finir en perte", pct(mc.prob_perte, 1).replace("+", "")],
+  ].map(([l, v]) => `<div class="row"><span>${l}</span><span class="num">${v}</span></div>`).join("") +
+    `<p class="note">Basé sur les trades 2020-2026, dont le marché haussier de 2020-2021 : ces chiffres sont optimistes si le marché change.</p>`;
+  $("hyp").innerHTML = [
+    ["Bougies 4 h au lieu de journalières", "rejetée", "les frais de 0,6 % absorbent le gain"],
+    ["Filtre de tendance du Bitcoin", "rejetée", r.btc_filter.detail],
+    ["Canal de cassure 20 vs 55 jours", "neutre", "aucun réglage ne gagne nettement"],
+  ].map(([h, v, d]) => `<div class="row"><span>${h}<br><span class="faint" style="font-size:12px">${esc(d)}</span></span><span>${chip(v, v === "rejetée" ? "baissier" : "range")}</span></div>`).join("");
+}
+
+/* ---------- données ---------- */
+let STATUS, MARKET, RESEARCH;
+async function refreshStatus() {
+  const [s, eq, trades, events] = await Promise.all(["/api/status", "/api/equity", "/api/trades", "/api/events"].map(api));
+  STATUS = s; QUOTE = s.quote || "EUR";
+  $("error").textContent = s.last_error ? "Dernière erreur : " + s.last_error : "";
+  const live = s.mode === "live";
+  $("mode").textContent = live ? "Argent réel" : "Simulation";
+  $("mode").className = "badge " + (live ? "live" : "");
+  $("state").textContent = s.halted ? "Arrêté" : s.paused ? "En pause" : "Actif";
+  $("state").className = "badge " + (s.halted ? "halt" : s.paused ? "warn" : "ok");
+  $("updated").textContent = "cycle " + (when(s.last_step) || "–");
+  const exposure = s.positions.reduce((t, p) => t + p.value, 0);
+  $("kpis").innerHTML =
+    kpi("Capital", money(s.equity), live ? "compte Coinbase" : pct(s.equity / s.initial_cash - 1) + " depuis le départ") +
+    kpi("Liquidités", money(s.cash), "disponibles pour acheter") +
+    kpi("Exposition", pct(s.equity ? exposure / s.equity : 0, 1).replace("+", ""), money(exposure) + " investis") +
+    kpi("Aujourd'hui", pct(s.day_pnl), "", cls(s.day_pnl)) +
+    kpi("Recul / plus haut", pct(s.drawdown), "coupe-circuit à −20 %", cls(s.drawdown)) +
+    kpi("Positions", String(s.positions.length), "max 3, " + money(s.max_order, 0) + " / ordre");
+  $("positions").innerHTML = table(s.positions, [
+    ["Actif", p => `<b>${esc(base(p.product))}</b>`], ["Valeur", p => `<span class="num">${money(p.value)}</span>`],
+    ["Gain", p => `<span class="num ${cls(p.pnl_pct)}">${pct(p.pnl_pct)}</span>`],
+    ["Stop", p => `<span class="num">${price(p.stop)}</span> <span class="faint num">${pct(p.stop_dist_pct, 1)}</span>`]],
+    "Aucune position : le bot attend un signal");
+  drawEquity(eq);
+  $("trades").innerHTML = table(trades, [
+    ["Date", t => when(t.time)], ["Actif", t => esc(base(t.product))],
+    ["Sens", t => t.side === "buy" ? '<span class="up">Achat</span>' : '<span class="down">Vente</span>'],
+    ["Prix", t => `<span class="num">${price(t.price)}</span>`], ["Montant", t => `<span class="num">${money(t.usd)}</span>`],
+    ["Motif", t => esc(t.reason)], ["Résultat", t => t.pnl_pct == null ? "" : `<span class="num ${cls(t.pnl_pct)}">${pct(t.pnl_pct)}</span>`],
+    ["", t => t.mode === "live" ? '<span class="chip baissier">réel</span>' : '<span class="chip range">simu</span>']],
+    "Aucun trade pour l'instant");
+  $("events").innerHTML = events.length ? events.map(e => `<li><time>${when(e.time)}</time>${esc(e.message)}</li>`).join("") : '<li class="empty">Aucun événement</li>';
+}
+
+async function refreshMarket() {
+  MARKET = await api("/api/market");
+  $("summary").innerHTML = "<b>Analyse.</b> " + esc(MARKET.summary);
+  $("ticker").innerHTML = MARKET.assets.map(a => `<span class="tick"><b>${base(a.product)}</b><span class="num">${price(a.price)}</span> <span class="num ${cls(a.change1d)}">${pct(a.change1d)}</span></span>`).join("");
+  $("watch").innerHTML = table(MARKET.assets, [
+    ["Actif", a => `<b>${base(a.product)}</b>`], ["Prix", a => `<span class="num">${price(a.price)}</span>`],
+    ["24 h", a => `<span class="num ${cls(a.change1d)}">${pct(a.change1d)}</span>`],
+    ["7 j", a => `<span class="num ${cls(a.change7d)}">${pct(a.change7d, 1)}</span>`],
+    ["30 j", a => `<span class="num ${cls(a.change30d)}">${pct(a.change30d, 1)}</span>`],
+    ["Régime", a => chip(a.regime)], ["RSI", a => `<span class="num">${num(a.rsi)}</span>`], ["ADX", a => `<span class="num">${num(a.adx)}</span>`],
+    ["Signal", a => chip(a.signal)], ["Cassure à", a => `<span class="num">${price(a.channelHigh)}</span> <span class="faint num">${pct(a.toBreakoutPct, 1)}</span>`]]);
+  $("regimes").innerHTML = MARKET.assets.map(a => `<div class="panel"><h2>${esc(a.product)} ${chip(a.regime)}</h2>
+    <div class="row"><span>Prix</span><span class="num">${price(a.price)}</span></div>
+    <div class="row"><span>Moyenne 50 j / 200 j</span><span class="num">${price(a.emaFast)} / ${price(a.emaSlow)}</span></div>
+    <div class="row"><span>Force de tendance (ADX)</span><span class="num">${num(a.adx)}</span></div>
+    <div class="row"><span>RSI 14</span><span class="num">${num(a.rsi)}</span></div>
+    <div class="row"><span>Volatilité journalière</span><span class="num">${pct(a.atrPct, 1).replace("+", "")}</span></div>
+    <div class="row"><span>Volume vs moyenne</span><span class="num">×${num(a.volumeRatio, 2)}</span></div>
+    <p class="note">${chip(a.signal)} ${esc(a.reason)}</p></div>`).join("");
+  $("corr").innerHTML = Object.entries(MARKET.correlations).map(([k, v]) =>
+    `<div style="background:rgba(59,130,246,${Math.max(0.06, Math.abs(v) * 0.45)})"><div class="faint" style="font-size:12px">${k}</div><div class="num" style="font-size:18px;font-weight:650">${num(v, 2)}</div></div>`).join("");
+  if (!$("product-seg").children.length) {
+    $("product-seg").innerHTML = MARKET.assets.map(a => `<button data-p="${a.product}" aria-pressed="false">${base(a.product)}</button>`).join("");
+    $("product-seg").onclick = e => { const p = e.target.dataset.p; if (p) drawProduct(p).catch(showError); };
+  }
+}
+
+async function refreshRisk() {
+  const r = await api("/api/risk");
+  const lv = r.live;
+  $("risk-kpis").innerHTML =
+    kpi("Capital", money(r.equity)) +
+    kpi("Exposition", pct(r.exposurePct, 1).replace("+", ""), money(r.exposure)) +
+    kpi("En jeu si tous les stops sautent", money(r.atRisk), pct(r.atRiskPct, 1).replace("+", "") + " du capital") +
+    kpi("Perte max réalisée", pct(lv?.maxDrawdown ?? 0), "depuis le lancement", cls(lv?.maxDrawdown ?? 0)) +
+    kpi("Sharpe (réel)", lv?.sharpe == null ? "–" : num(lv.sharpe, 2), lv?.sharpe == null ? "après 20 jours de données" : "") +
+    kpi("Sortino (réel)", lv?.sortino == null ? "–" : num(lv.sortino, 2), lv?.sortino == null ? "après 20 jours de données" : "");
+  const meter = (l, v, max, txt) => `<div style="margin-bottom:14px"><div class="row" style="border:0;padding:0 0 6px"><span>${l}</span><span class="num">${txt}</span></div><div class="meter"><div style="width:${Math.min(100, v / max * 100)}%;background:${v / max > 0.8 ? "var(--down)" : "var(--accent)"}"></div></div></div>`;
+  $("exposure").innerHTML =
+    meter("Capital investi", r.exposurePct, 0.99, pct(r.exposurePct, 0).replace("+", "") + " / 99 %") +
+    meter("Perte du jour", Math.max(0, -r.guard.dayPnl), r.limits.dailyLossLimit, pct(r.guard.dayPnl, 2) + " / −3 %") +
+    meter("Recul depuis le plus haut", Math.max(0, -r.guard.drawdown), r.limits.maxDrawdown, pct(r.guard.drawdown, 2) + " / −20 %");
+  $("limits").innerHTML = [
+    ["Risque par trade", pct(r.limits.riskPerTrade, 0).replace("+", "") + " du capital"],
+    ["Taille max d'une position", pct(r.limits.maxPositionPct, 0).replace("+", "") + " du capital"],
+    ["Plafond par ordre", money(r.limits.maxOrder, 0)],
+    ["Perte du jour → stop des achats", "−" + pct(r.limits.dailyLossLimit, 0).replace("+", "")],
+    ["Recul → arrêt total et vente", "−" + pct(r.limits.maxDrawdown, 0).replace("+", "")],
+    ["État du coupe-circuit", r.guard.halted ? `<span class="down">déclenché : ${esc(r.guard.haltReason)}</span>` : '<span class="up">armé</span>'],
+  ].map(([l, v]) => `<div class="row"><span>${l}</span><span class="num">${v}</span></div>`).join("");
+}
+
+function showError(e) { $("error").textContent = "Impossible de joindre le bot (" + e.message + ")"; }
+
+const loaded = {};
+async function openTab(name) {
+  document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === name));
+  document.querySelectorAll("section[role=tabpanel]").forEach(s => s.classList.toggle("on", s.id === "tab-" + name));
+  try { localStorage.setItem("tab", name); } catch {}
+  if (name === "charts") await drawProduct(currentProduct || MARKET?.assets?.[0]?.product || (STATUS?.products || [])[0]);
+  if (name === "risk") await refreshRisk();
+  if (name === "lab" && !loaded.lab) { RESEARCH = await api("/api/research"); drawLab(RESEARCH); loaded.lab = true; }
+}
+document.querySelector("nav").onclick = e => { const t = e.target.dataset.tab; if (t) openTab(t).catch(showError); };
+
+(async () => {
+  try {
+    await refreshStatus();
+    await refreshMarket();
+    let start = "overview";
+    try { start = localStorage.getItem("tab") || "overview"; } catch {}
+    await openTab(start);
+  } catch (e) { showError(e); }
+  setInterval(() => refreshStatus().catch(showError), 30000);
+  setInterval(() => refreshMarket().catch(showError), 300000);
+})();
+</script>
+</body>
+</html>

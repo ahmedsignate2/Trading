@@ -4,7 +4,8 @@
 //  - GET / et /api/* : tableau de bord en lecture seule, protégé par mot de passe
 import { Bot, Env } from "./bot";
 import { ensureWebhook, handleUpdate, sendTelegram } from "./telegram";
-import DASHBOARD_HTML from "../../bot/dashboard.html";
+import DASHBOARD_HTML from "./dashboard.html";
+import RESEARCH from "./research.json";
 
 const makeBot = (env: Env) => new Bot(env, msg => sendTelegram(env, msg));
 
@@ -31,6 +32,30 @@ function authorized(req: Request, env: Env): boolean {
     const given = atob(h.slice(6)).split(":").slice(1).join(":");
     return equalSecret(given, pw);
   } catch { return false; }
+}
+
+async function route(url: URL, env: Env, bot: Bot): Promise<Response> {
+    switch (url.pathname) {
+    case "/":
+      return new Response(DASHBOARD_HTML, { headers: { "Content-Type": "text/html; charset=utf-8", ...SECURITY_HEADERS } });
+    case "/api/status":
+      return json(await bot.snapshot());
+    case "/api/equity":
+      return json((await env.DB.prepare("SELECT * FROM (SELECT * FROM equity ORDER BY time DESC LIMIT 5000) ORDER BY time").all()).results);
+    case "/api/trades":
+      return json((await env.DB.prepare("SELECT * FROM trades ORDER BY id DESC LIMIT 100").all()).results);
+    case "/api/market":
+      return json(await bot.market());
+    case "/api/chart":
+      return json(await bot.chart(url.searchParams.get("product") ?? ""));
+    case "/api/risk":
+      return json(await bot.riskReport());
+    case "/api/research":
+      return json(RESEARCH);
+    case "/api/events":
+      return json((await env.DB.prepare("SELECT * FROM events WHERE level != 'pending' ORDER BY id DESC LIMIT 30").all()).results);
+  }
+  return new Response("introuvable", { status: 404 });
 }
 
 export default {
@@ -65,19 +90,12 @@ export default {
       });
     }
 
-    switch (url.pathname) {
-      case "/":
-        return new Response(DASHBOARD_HTML, { headers: { "Content-Type": "text/html; charset=utf-8", ...SECURITY_HEADERS } });
-      case "/api/status":
-        return json(await bot.snapshot());
-      case "/api/equity":
-        return json((await env.DB.prepare("SELECT * FROM (SELECT * FROM equity ORDER BY time DESC LIMIT 5000) ORDER BY time").all()).results);
-      case "/api/trades":
-        return json((await env.DB.prepare("SELECT * FROM trades ORDER BY id DESC LIMIT 100").all()).results);
-      case "/api/events":
-        return json((await env.DB.prepare("SELECT * FROM events WHERE level != 'pending' ORDER BY id DESC LIMIT 30").all()).results);
+    try {
+      return await route(url, env, bot);
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),
+        { status: 500, headers: { "Content-Type": "application/json", ...SECURITY_HEADERS } });
     }
-    return new Response("introuvable", { status: 404 });
   },
 
   async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {

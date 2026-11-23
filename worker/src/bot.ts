@@ -5,6 +5,17 @@ import {
   CONFIG, Guard, canOpen, initialStop, lastSignal, positionSizeUsd, trailStop, updateGuard,
 } from "./strategy";
 import SCHEMA from "../schema.sql";
+import { analyzeAsset, correlation, emaSeries, riskMetrics } from "./market";
+
+// Cache par instance du Worker : évite de retélécharger les bougies à chaque rafraîchissement.
+const candleCache = new Map<string, { at: number; data: Awaited<ReturnType<typeof recentCandles>> }>();
+async function dailyCandles(product: string) {
+  const hit = candleCache.get(product);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.data;
+  const data = await recentCandles(product, CONFIG.granularity, CONFIG.granularitySeconds, 600);
+  candleCache.set(product, { at: Date.now(), data });
+  return data;
+}
 
 export interface Env {
   DB: D1Database;
@@ -53,7 +64,7 @@ export class Bot {
     this.broker = this.mode === "live" ? new LiveBroker(env, this.quote) : new PaperBroker(env.DB);
   }
 
-  private get risk() {
+  private get limits() {
     return { ...CONFIG.risk, maxOrderUsd: this.maxOrder };
   }
 
@@ -202,8 +213,8 @@ export class Bot {
     const [ok, why] = canOpen(acc.guard, equity);
     if (!ok) { await this.say(`Signal d'achat ${product} ignoré : ${why}`, "warning"); return; }
     const stop = initialStop(s.close, s.atr);
-    const usd = positionSizeUsd(equity, cash, exposure, price, stop, this.risk);
-    if (usd <= 0 && cash < this.risk.minOrderUsd) {
+    const usd = positionSizeUsd(equity, cash, exposure, price, stop, this.limits);
+    if (usd <= 0 && cash < this.limits.minOrderUsd) {
       await this.say(`Signal d'achat ${product} ignoré : solde ${this.quote} insuffisant (${fmt(cash)})`, "warning");
       return;
     }
@@ -226,7 +237,7 @@ export class Bot {
       max_order: this.maxOrder, missing_keys: this.missingKeys,
       paused: !!acc.paused, halted: !!g.halted, halt_reason: g.haltReason ?? "",
       equity, cash, initial_cash: CONFIG.initialCash, peak_equity: g.peakEquity ?? equity,
-      drawdown: g.peakEquity ? equity / g.peakEquity - 1 : 0,
+      drawdown: g.peakEquity ? Math.min(0, equity / g.peakEquity - 1) : 0,
       day_pnl: g.dayStartEquity ? equity / g.dayStartEquity - 1 : 0,
       positions, prices: acc.prices, last_step: acc.last_step, last_error: acc.last_error,
     };
@@ -249,6 +260,58 @@ export class Bot {
     await this.say("🔓 Coupe-circuit réinitialisé manuellement.", "warning");
   }
 
+  /** Vue marché : régime et indicateurs par actif, corrélations, synthèse. */
+  async market() {
+    const acc = await this.account();
+    const all = await Promise.all(this.products.map(p => dailyCandles(p)));
+    const assets = this.products.map((p, i) => analyzeAsset(p, all[i], acc.prices[p]));
+    const corr: Record<string, number> = {};
+    for (let i = 0; i < this.products.length; i++)
+      for (let j = i + 1; j < this.products.length; j++)
+        corr[`${this.products[i].split("-")[0]}/${this.products[j].split("-")[0]}`] = correlation(all[i], all[j]);
+    const bull = assets.filter(a => a.regime === "haussier").length;
+    const bear = assets.filter(a => a.regime === "baissier").length;
+    const summary = assets.some(a => a.signal === "achat") ? "Signal d'achat actif."
+      : bull ? `${bull} actif(s) en tendance haussière : le bot attend une cassure.`
+      : bear === assets.length ? "Marché baissier sur tous les actifs : le bot reste à l'écart, c'est voulu."
+      : "Pas de tendance nette : aucun avantage, le bot attend.";
+    return { assets, correlations: corr, summary, updated: new Date().toISOString() };
+  }
+
+  /** Bougies + moyennes mobiles + trades du bot, pour le graphique. */
+  async chart(product: string) {
+    if (!this.products.includes(product)) throw new Error("Produit inconnu");
+    const c = (await dailyCandles(product)).slice(-400);
+    const all = await dailyCandles(product);
+    const e = emaSeries(all);
+    const off = all.length - c.length;
+    const { results: trades } = await this.env.DB.prepare(
+      "SELECT time, side, price, reason, pnl_pct FROM trades WHERE product = ? ORDER BY id").bind(product).all();
+    const pos = (await this.positions()).find(p => p.product === product) ?? null;
+    return {
+      candles: c.map(b => [b.time, b.open, b.high, b.low, b.close, b.volume ?? 0]),
+      emaFast: c.map((b, i) => [b.time, e.fast[off + i]]).filter(x => Number.isFinite(x[1])),
+      emaSlow: c.map((b, i) => [b.time, e.slow[off + i]]).filter(x => Number.isFinite(x[1])),
+      trades, position: pos,
+    };
+  }
+
+  /** Risque réel du portefeuille : exposition, perte maximale si tous les stops sont touchés. */
+  async riskReport() {
+    const s = await this.snapshot();
+    const { results } = await this.env.DB.prepare(
+      "SELECT time, equity FROM (SELECT * FROM equity ORDER BY time DESC LIMIT 5000) ORDER BY time").all<{ time: string; equity: number }>();
+    const exposure = s.positions.reduce((t, p) => t + p.value, 0);
+    const atRisk = s.positions.reduce((t, p) => t + Math.max(0, p.qty * (p.price - p.stop)), 0);
+    return {
+      equity: s.equity, exposure, exposurePct: s.equity ? exposure / s.equity : 0,
+      atRisk, atRiskPct: s.equity ? atRisk / s.equity : 0,
+      limits: { ...this.limits, maxOrder: this.maxOrder },
+      guard: { halted: s.halted, haltReason: s.halt_reason, drawdown: s.drawdown, dayPnl: s.day_pnl },
+      live: riskMetrics(results),
+    };
+  }
+
   async signalReport() {
     const out = [];
     for (const product of this.products) {
@@ -265,6 +328,8 @@ export class Bot {
       await this.env.DB.prepare("DELETE FROM positions").run();
       await this.say(`Positions ${(acc.guard as any).mode ?? "simulées"} retirées du suivi : ${old.map(p => p.product).join(", ")}`, "warning");
     }
+    // L'historique de capital de l'autre mode n'a pas de sens ici : on repart d'une courbe vierge.
+    await this.env.DB.prepare("DELETE FROM equity").run();
     await this.saveAccount({ guard: { mode: this.mode }, last_bar: {} });
     await this.say(this.mode === "live"
       ? `💶 Mode ARGENT RÉEL activé sur Coinbase (${this.products.join(", ")}). Plafond : ${fmt(this.maxOrder)} ${this.quote} par ordre.`

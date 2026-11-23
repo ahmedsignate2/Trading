@@ -1,7 +1,7 @@
 // Même stratégie et même gestion du risque que bot/strategy.py et bot/risk.py.
 // La parité avec Python est vérifiée par test/parity.test.mjs.
 
-export interface Candle { time: number; open: number; high: number; low: number; close: number }
+export interface Candle { time: number; open: number; high: number; low: number; close: number; volume?: number }
 
 export const CONFIG = {
   mode: "paper" as const,

@@ -9,6 +9,7 @@ export const COMMANDS: [string, string][] = [
   ["positions", "Positions ouvertes avec gain et stop"],
   ["prix", "Prix actuels"],
   ["solde", "Soldes du compte Coinbase (mode réel)"],
+  ["marche", "Analyse du marché : régime, RSI, force de tendance"],
   ["signaux", "Distance de chaque crypto à un signal d'achat"],
   ["journal", "Derniers trades (ex. /journal 20)"],
   ["perf", "Bilan des trades réalisés"],
@@ -22,7 +23,7 @@ export const COMMANDS: [string, string][] = [
   ["aide", "Liste des commandes"],
 ];
 
-const money = (x: number) => x.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " $";
+const money = (x: number) => x.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
 const pct = (x: number) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(2).replace(".", ",")} %`;
 
 export async function tg(env: Env, method: string, params: object): Promise<any> {
@@ -147,6 +148,16 @@ async function run(bot: Bot, cmd: string, args: string[]): Promise<string> {
       const worst = results.reduce((a, b) => (b.pnl_pct < a.pnl_pct ? b : a));
       return `Trades clôturés : ${results.length}\nGagnants : ${wins.length} (${Math.round(wins.length / results.length * 100)} %)\n` +
         `Variation moyenne : ${pct(avg)}\nMeilleur : ${best.product} ${pct(best.pnl_pct)}\nPire : ${worst.product} ${pct(worst.pnl_pct)}`;
+    }
+
+    case "marche": {
+      const m = await bot.market();
+      const icon: Record<string, string> = { haussier: "🟢", baissier: "🔴", range: "⚪" };
+      const lines = m.assets.map(a =>
+        `${icon[a.regime]} ${a.product.split("-")[0]} ${money(a.price)} (${pct(a.change1d)} 24 h, ${pct(a.change30d)} 30 j)\n` +
+        `   Régime ${a.regime} · ADX ${a.adx.toFixed(0)} · RSI ${a.rsi.toFixed(0)} · volatilité ${(a.atrPct * 100).toFixed(1)} %/jour`);
+      const corr = Object.entries(m.correlations).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(" · ");
+      return `📊 Marché\n\n${lines.join("\n\n")}\n\nCorrélations 90 j : ${corr}\n\n${m.summary}`;
     }
 
     case "solde": {
